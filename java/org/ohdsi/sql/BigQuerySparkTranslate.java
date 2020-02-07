@@ -21,6 +21,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -394,6 +395,10 @@ public class BigQuerySparkTranslate {
 	 */
 	private static String sparkCreateTable(String sql) {
 					
+		if (!sql.endsWith(";")) {
+			sql += ";";
+		};
+		
 		String pattern = "CREATE TABLE @@table (@@definition)";
 		String if_pattern = "IF OBJECT_ID('@@table', 'U') IS NULL";
 		
@@ -401,39 +406,37 @@ public class BigQuerySparkTranslate {
 		List<Block> if_prefix_pattern = SqlTranslate.parseSearchPattern(if_pattern);
 		
 		sql = sql.trim().replaceAll("\t", " ").replaceAll(" +", " ");
+			
+		MatchedPattern create_table_match = SqlTranslate.search(sql, create_table_pattern, 0);
 		
-		for (MatchedPattern create_table_match = SqlTranslate.search(sql, create_table_pattern,
-				0); create_table_match.start != -1; create_table_match = SqlTranslate.search(sql, create_table_pattern,
-						create_table_match.startToken + 1)) {
+		String table_name = create_table_match.variableToValue.get("@@table");
+		String definition_list = create_table_match.variableToValue.get("@@definition");
+		
+		if (table_name != null && definition_list != null) {
 			
-			final String table_name = create_table_match.variableToValue.get("@@table").replaceAll("\r\n", "");
-			final String definition_list = create_table_match.variableToValue.get("@@definition").toLowerCase().replaceAll("\r\n", "").replaceAll(" as ", " ");
+			table_name = table_name.replaceAll("\r\n", "");
+			definition_list = definition_list.toLowerCase().replaceAll("\r\n", "").replaceAll(" as ", " ");
 			
-			if (table_name.length() > 0 && definition_list.length() > 0) {				
-				List<String> column_names = new ArrayList<String>();
-				for (String f : definition_list.split(",")) {
-					column_names.add("\tCAST(NULL AS " + f.trim().split(" ")[1] + ") AS " + f.trim().split(" ")[0]);
-				}
-				
-				String prefix = sql.substring(0, create_table_match.start);
-				String suffix = sql.substring(create_table_match.end);
-				
-				MatchedPattern if_prefix_match = SqlTranslate.search(prefix, if_prefix_pattern, 0);
-						
-				if (if_prefix_match.start == 0) {
-					sql = "CREATE TABLE IF NOT EXISTS " + table_name + "USING DELTA\r\nAS\r\nSELECT " 
-							+ String.join(",\r\n", column_names) + " WHERE 1 = 0"
-							+ suffix;
-				} else {
-					sql = prefix
-							+ "CREATE TABLE " + table_name + "\r\nUSING DELTA\r\nAS\r\nSELECT " 
-							+ String.join(",\r\n", column_names) + " WHERE 1 = 0"
-							+ suffix;	
-				}
+			List<String> column_names = new ArrayList<String>();
+			for (String f : definition_list.split(",")) {
+				column_names.add("\tCAST(NULL AS " + f.trim().split(" ")[1] + ") AS " + f.trim().split(" ")[0]);
+			}
+			
+			String prefix = sql.substring(0, create_table_match.start);
+			
+			MatchedPattern if_prefix_match = SqlTranslate.search(prefix, if_prefix_pattern, 0);
+					
+			if (if_prefix_match.start == 0) {
+				sql = "CREATE TABLE IF NOT EXISTS " + table_name + "\r\nUSING DELTA\r\nAS\r\nSELECT " 
+						+ String.join(",\r\n", column_names) + " WHERE 1 = 0";
+			} else {
+				sql = prefix
+						+ "CREATE TABLE " + table_name + "\r\nUSING DELTA\r\nAS\r\nSELECT " 
+						+ String.join(",\r\n", column_names) + " WHERE 1 = 0";	
 			}
 		}
 		
-		return sql;
+		return sql.replaceAll(";", "");
 	}
 	
 	
@@ -534,6 +537,45 @@ public class BigQuerySparkTranslate {
 		return sql.replaceAll(";", "");
 	}
 	
+	private static String sparkInsertSelectUnions(String sql, List<String> metaFields, Map<String, String> mappings, Boolean isValue) {
+		
+		String[] patterns = { 
+				"UNION SELECT @@columns FROM",
+				"UNION ALL SELECT @@columns FROM"
+		};
+		
+		for (String pattern : patterns) {	
+			
+			List<Block> select_parsed = SqlTranslate.parseSearchPattern(pattern);
+			
+			for (MatchedPattern select_match = SqlTranslate.search(sql, select_parsed,
+					0); select_match.start != -1; select_match = SqlTranslate.search(sql, select_parsed,
+					select_match.startToken + 1)) {
+				
+				String columns_list = select_match.variableToValue.get("@@columns");	
+				if (columns_list != null) {
+					columns_list = columns_list.toLowerCase().replaceAll("\r\n", "");
+					
+					// re-construct the definitions to explicitly match table structure
+					List<String> definition_sql = new ArrayList<String>();
+					for (String mf : metaFields) {
+						if (mappings.containsKey(mf)) {
+							definition_sql.add(mappings.get(mf));
+						} else {
+							definition_sql.add("NULL AS " + mf);
+						}
+					}
+					
+					sql = sql.substring(0, select_match.start) + 
+							pattern.replace("@@columns", String.join(",", definition_sql)) + " \r\n " + 
+							sql.substring(select_match.end);
+				}			
+			}
+		}		
+		
+		return sql;
+	}
+	
 	private static String sparkInsertSelect(String sql, String connectionString) throws SQLException {
 		
 		sql = sql.trim().replaceAll("\t", " ").replaceAll(" +", " ");
@@ -568,15 +610,17 @@ public class BigQuerySparkTranslate {
 			source_table_name = insert_select_from_match.variableToValue.get("@@source");
 			Boolean hasFrom = false;
 			String this_pattern = insert_select_pattern;
+			MatchedPattern this_match = insert_select_match;
 			
 			// check if this has a from
 			if (source_table_name != null) {
 				hasFrom = true;
-				source_table_name = source_table_name.replaceAll("\r\n", "");
+				//source_table_name = source_table_name.replaceAll("\r\n", " ");
 				// use a definition list expecting a from
 				definition_list = insert_select_from_match.variableToValue.get("@@definition");
 			
 				this_pattern = insert_select_from_pattern;
+				this_match = insert_select_from_match;
 				
 				if (definition_list == null) {
 					return sql;
@@ -604,44 +648,28 @@ public class BigQuerySparkTranslate {
 					definition_sql.add("NULL AS " + mf);
 				}
 			}
+			
+			String suffix = sql.substring(this_match.end);
+			// handles if we have several tables unioned together for this insert
+			
+			if (sql.toLowerCase().contains(" union ") || sql.toLowerCase().contains("union all")) {
+				sql = sparkInsertSelectUnions(sql, metaFields, mappings, false);
+				source_table_name = (source_table_name.split("union"))[0];
+				suffix = sql.substring(sql.toLowerCase().indexOf("union"));
+			}
 		
 			if (hasFrom) {
 				sql = "INSERT INTO " + target_table_name + "\r\n\t"
 						+ "SELECT " + String.join(",\r\n\t", definition_sql)
-						+ "\r\nFROM " + source_table_name;
+						+ "\r\nFROM " + source_table_name + " \r\n " + suffix;
 			} else {
 				sql = "INSERT INTO " + target_table_name + "\r\n\t"
-						+ "SELECT " + String.join(",\r\n\t", definition_sql);
+						+ "SELECT " + String.join(",\r\n\t", definition_sql) + " \r\n " + suffix;
 			}
 		}
-		return sql.replaceAll(";", "");
+		return sql;
 	}
 	
-	
-//	private static String sparkColumnList(String sql) {
-//		List<Block> pattern = SqlTranslate.parseSearchPattern("INSERT INTO @@target (@@columns)");
-//				
-//		for (MatchedPattern insert_into_match = SqlTranslate.search(sql, pattern,
-//				0); insert_into_match.start != -1; insert_into_match = SqlTranslate.search(sql, pattern,
-//						insert_into_match.startToken + 1)) {
-//			
-//			final String target_table_name = insert_into_match.variableToValue.get("@@target").replaceAll("\r\n", "");
-//			final String columns_list = insert_into_match.variableToValue.get("@@columns").toLowerCase().replaceAll("\r\n", "");
-//			
-//			if (target_table_name.length() > 0 
-//					&& columns_list.length() > 0) {
-//				
-//				String prefix = sql.substring(0, insert_into_match.start);
-//				String suffix = sql.substring(insert_into_match.end);
-//				
-//				sql = prefix
-//						+ "INSERT INTO " + target_table_name + "\r\n"
-//						+ suffix;	
-//			}
-//		}
-//		
-//		return sql;
-//	}
 	
 	
 	/**
@@ -653,32 +681,70 @@ public class BigQuerySparkTranslate {
 	 */
 	public static String sparkHandleInsert(String sql, String connectionString) throws SQLException {
 		
-		Boolean semicolon = true;
-		if (!sql.trim().endsWith(";")) {
-			sql += ";";
-			semicolon = false;
+		List<String> splits = new ArrayList<String>(Arrays.asList(SqlSplit.splitSql(sql)));
+		
+		for (int i = 0; i < splits.size(); i++) {
+			splits.set(i, sparkInsertSelect(splits.get(i), connectionString));
+			splits.set(i, sparkInsertValues(splits.get(i), connectionString));
 		}
 		
-		String[] splits = SqlSplit.splitSql(sql);
-		
-		for (int i = 0; i < splits.length; i++) {
-			splits[i] = sparkInsertSelect(splits[i], connectionString);
-			splits[i] = sparkInsertValues(splits[i], connectionString);
-		}
-		
-		sql = String.join(";\r\n", splits);
-		
-		if (!semicolon) {
-			sql = sql.replaceAll("; $", "");
+		splits.removeAll(Arrays.asList("", null));
+		if (splits.size() > 1 || sql.trim().endsWith(";")) {
+			sql = String.join(";\r\n", splits).trim() + ";";
 		} else {
-			sql += ";";
+			sql = String.join(";\r\n", splits).trim();	
 		}
 		
 		return sql;
 	}
 	
+	private static String sparkCrossJoin(String select_pattern, String sql) {
+		
+		if (!sql.trim().endsWith(";")) {
+			sql += ";";
+		}
+		
+		List<Block> select_parsed = SqlTranslate.parseSearchPattern(select_pattern);
+		
+		sql = sql.trim().replaceAll("\t", " ").replaceAll(" +", " ");
+		
+		for (MatchedPattern select_match = SqlTranslate.search(sql, select_parsed,
+				0); select_match.start != -1; select_match = SqlTranslate.search(sql, select_parsed,
+				select_match.startToken + 1)) {
+			
+			String tables = select_match.variableToValue.get("@@tables");
+			
+			if (tables != null) {	
+				
+				if (tables.split("union all").length > 1 || tables.split("\r\nunion\r\n").length > 1 || 
+						tables.split("union").length > 1 || tables.split("group by").length > 1 ||
+						!tables.contains(",") || 
+						(tables.indexOf(",") > tables.toLowerCase().indexOf("order by") && 
+								tables.toLowerCase().indexOf("order by") != -1)) {
+					continue;
+				}
+				CommaListIterator tables_iter = new CommaListIterator(tables, CommaListIterator.ListType.SELECT);
+			
+				List<String> crossjoined_tables = new ArrayList<String>();
+		
+				while (!tables_iter.IsDone()) {	
+					String expression = tables_iter.GetFullExpression();
+					crossjoined_tables.add(expression);
+					tables_iter.Next();
+				}			
+			
+				if (crossjoined_tables.size() > 1) {
+					String table_names = String.join(" cross join ", crossjoined_tables);
+					sql = sql.substring(0, select_match.start) + " from " +  
+							table_names + " \r\n " + sql.substring(sql.indexOf(tables) + tables.length());
+				}
+			}
+		}
+		return sql;
+	}
 	
-		/**
+	
+	/**
 	 * spark specific translations
 	 *
 	 * @param sql
@@ -687,30 +753,39 @@ public class BigQuerySparkTranslate {
 		 * @throws SQLException 
 	 */
 	public static String translateSpark(String sql) {
-		
-		Boolean semicolon = false;
-		if (sql.trim().endsWith(";")) {
-			semicolon = true;
-		}
-		
+				
 		sql = bigQueryLowerCase(sql);
 		sql = bigQueryAliasCommonTableExpressions(sql, "with @@a (@@b) as (select @@c from @@d)");
 		sql = bigQueryAliasCommonTableExpressions(sql, "with @@a (@@b) as (select @@c union @@d)");
 		sql = bigQueryAliasCommonTableExpressions(sql, ", @@a (@@b) as (select @@c from @@d)");
 		
-		if (sql.toLowerCase().contains("cross join") &
-				sql.toLowerCase().contains("insert")) {
-			sql = "set spark.sql.crossJoin.enabled = true; \n\n" + sql;
-		}		
-		
 		// effectively removes comments
-		sql = String.join(";", SqlSplit.splitSql(sql)).trim();
+		String[] splits = SqlSplit.splitSql(sql);
 		
-		sql = sparkCreateTable(sql);
+		// spark by default doesn't allow cross joins using commas
+		for (int i = 0; i < splits.length; i++) {
+			splits[i] = sparkCrossJoin("FROM @@tables)", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables union", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables group by", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables order by", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables join", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables inner", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables left", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables right", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables outer", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables where", splits[i]);
+			splits[i] = sparkCrossJoin("FROM @@tables;", splits[i]);
+			
+			splits[i] = sparkCreateTable(splits[i]);			
+		}
 		
-		// restore semicolon at the end if it was there before
-		if (semicolon) {
-			sql += ";";
+		// if this is a batch command or the SQL originally ended with a semicolon
+		// ensure the semicolon is back in the SQL
+		
+		if (splits.length > 1 || sql.trim().endsWith(";")) {
+			sql = String.join(";\r\n", splits).trim() + ";";
+		} else {
+			sql = String.join(";\r\n", splits).trim();	
 		}
 		return sql;
 	}
