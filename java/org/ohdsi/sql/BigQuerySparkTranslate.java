@@ -538,7 +538,7 @@ public class BigQuerySparkTranslate {
 				if (mappings.containsKey(mf)) {
 					definition_sql.add(mappings.get(mf));
 				} else {
-					definition_sql.add("NULL AS " + mf);
+					definition_sql.add("NULL");
 				}
 			}
 			
@@ -589,7 +589,7 @@ public class BigQuerySparkTranslate {
 				if (mappings.containsKey(mf)) {
 					definition_sql.add(mappings.get(mf));
 				} else {
-					definition_sql.add("NULL AS " + mf);
+					definition_sql.add("NULL");
 				}
 			}
 
