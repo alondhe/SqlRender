@@ -238,3 +238,19 @@ translateSingleStatement <- function(sql = "",
 splitSql <- function(sql) {
   rJava::J("org.ohdsi.sql.SqlSplit")$splitSql(sql)
 }
+
+
+#' Handle Spark insert statements
+#' 
+#' @param connection          The connection to the database server.
+#' @param sql                 The SQL to be executed
+#' 
+#' @export
+sparkHandleInsert <- function(connection, sql) {
+  if (connection@dbms == "spark") {
+    obj <- rJava::.jnew("org.ohdsi.sql.BigQuerySparkTranslate")
+    sql <- rJava::.jcall(obj, "Ljava/lang/String;", "sparkHandleInsert", sql, connection@jConnection)
+  }
+  
+  sql
+}
