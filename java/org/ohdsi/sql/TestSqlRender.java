@@ -119,7 +119,7 @@ public class TestSqlRender {
 		sql = "IF OBJECT_ID('@temp_database_schema.@target_table', 'U') IS NOT NULL DROP TABLE @temp_database_schema.@target_table;";
 		String path = "inst/csv/replacementPatterns.csv";
 		sql = SqlTranslate.translateSqlWithPath(sql, "spark", null, null, path);
-		String connectionString = "jdbc:spark://databricks-edl.cloud.databricks.com:443/default;transportMode=http;ssl=1;httpPath=sql/protocolv1/o/0/1029-120603-scrip58;AuthMech=3;UID=token;PWD=dapia5cdb9aa0d5a322517812d8dcdce2bd6;UseNativeQuery=1";
+		String connectionString = "jdbc:spark://";
 		
 		sql = BigQuerySparkTranslate.sparkHandleInsert(sql, connectionString);
 		System.out.println(sql);
