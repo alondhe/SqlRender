@@ -902,8 +902,7 @@ public class BigQuerySparkTranslate {
 				if (tables.split("union all").length > 1 || tables.split("\r\nunion\r\n").length > 1 || 
 						tables.split("union").length > 1 || tables.split("group by").length > 1 ||
 						!tables.contains(",") || 
-						(tables.indexOf(",") > tables.toLowerCase().indexOf("order by") && 
-								tables.toLowerCase().indexOf("order by") != -1)) {
+						(tables.indexOf(",", tables.toLowerCase().indexOf("order by")) > tables.toLowerCase().indexOf("order by"))) {
 					continue;
 				}
 				CommaListIterator tables_iter = new CommaListIterator(tables, CommaListIterator.ListType.SELECT);
