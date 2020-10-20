@@ -4,6 +4,3 @@
 \name{SqlRender}
 \alias{SqlRender}
 \title{SqlRender}
-\description{
-SqlRender
-}

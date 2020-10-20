@@ -6,15 +6,7 @@ public class TestSqlRender {
 
 	public static void main(String[] args) throws SQLException {
 		
-		String sql = "SELECT DISTINCT \n" +
-				"  YEAR(observation_period_start_date)*100 + MONTH(observation_period_start_date) AS obs_month,\n" +
-				"  CAST(CAST(YEAR(observation_period_start_date) AS VARCHAR(4)) + RIGHT('0' + CAST(MONTH(OBSERVATION_PERIOD_START_DATE) AS VARCHAR(2)), 2) + '01' AS DATE) AS obs_month_start,  \n" +
-				"  DATEADD(dd,-1,DATEADD(mm,1,CAST(CAST(YEAR(observation_period_start_date) AS VARCHAR(4)) +  RIGHT('0' + CAST(MONTH(OBSERVATION_PERIOD_START_DATE) AS VARCHAR(2)), 2) + '01' AS DATE))) AS obs_month_end\n" +
-				"INTO\n" +
-				"  #temp_dates\n" +
-				"FROM \n" +
-				"  @cdm_database_schema.observation_period\n" +
-				";";
+		String sql = "select 'NEGATIVE-NOT DETECTED     Reference range: NOT DETECTED' as thing;";
 		String path = "inst/csv/replacementPatterns.csv";
 		sql = SqlTranslate.translateSqlWithPath(sql, "spark", null, null, path);
 

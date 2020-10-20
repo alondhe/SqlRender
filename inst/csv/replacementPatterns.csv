@@ -769,7 +769,7 @@ spark,LOG(@expression),LN(@expression)
 spark,<L_O_G>,LOG
 spark,LOG10(@expression),"LOG(10,@expression)"
 spark,"ISNULL(@a,@b)","COALESCE(@a,@b)"
-spark,"ISNUMERIC(@a)","CASE WHEN CAST('@a' AS DOUBLE) IS NOT NULL THEN 1 ELSE 0 END"
+spark,"ISNUMERIC(@a)","CASE WHEN CAST(@a AS DOUBLE) IS NOT NULL THEN 1 ELSE 0 END"
 spark,COUNT_BIG(@a),COUNT(@a)
 spark,SQUARE(@a),((@a)*(@a))
 spark,NEWID(),UUID()
